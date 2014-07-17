@@ -1,4 +1,4 @@
-MBCellVol
+MitoGraph
 =========
 
-Mitochondria-Based Cell Volume
+Software for Quantifying Mitochondrial Content in Live Cells

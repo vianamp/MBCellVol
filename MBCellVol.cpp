@@ -25,6 +25,7 @@
 #include <vtkInformation.h>
 #include <vtkSphereSource.h>
 #include <vtkSmartPointer.h>
+#include <vtkUnstructuredGrid.h>
 #include <vtkStructuredPoints.h>
 #include <vtkInformationVector.h>
 #include <vtkUnsignedCharArray.h>
@@ -38,6 +39,7 @@
 #include <vtkImageGaussianSmooth.h>
 #include <vtkAppendPolyData.h>
 #include <vtkPolyDataWriter.h>
+#include <vtkPolyDataReader.h>
 #include <vtkContourFilter.h>
 #include <vtkDoubleArray.h>
 #include <vtkTIFFReader.h>
@@ -46,6 +48,27 @@
 #include <vtkImageRFFT.h>
 #include <vtkImageCast.h>
 #include <vtkPoints.h>
+
+void SavePolyData(vtkPolyData *PolyData, const char FileName[]) {
+
+    #ifdef DEBUG
+        printf("Saving PolyData from XYZ list...\n");
+    #endif
+
+    #ifdef DEBUG
+        printf("\t#Points in PolyData file: %llu.\n",(vtkIdType)PolyData->GetNumberOfPoints());
+    #endif
+
+    vtkSmartPointer<vtkPolyDataWriter> Writer = vtkSmartPointer<vtkPolyDataWriter>::New();
+    Writer -> SetFileType(VTK_BINARY);
+    Writer -> SetFileName(FileName);
+    Writer -> SetInputData(PolyData);
+    Writer -> Write();
+
+    #ifdef DEBUG
+        printf("\tFile Saved!\n");
+    #endif
+}
 
 template<typename sstype> void swap(sstype *x, sstype *y) {
      sstype t = *y; *y = *x; *x = t;
@@ -59,7 +82,22 @@ void sort(double *l1, double *l2, double *l3, int *i1, int *i2, int *i3) {
 
 void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
 
-    vtkPolyData *Surface;
+    char _fullpath[256];
+    sprintf(_fullpath,"%s_surface.vtk",FileName);
+
+    #ifdef DEBUG
+        printf("Loading surface from %s\n",_fullpath);
+    #endif
+
+    vtkSmartPointer<vtkPolyDataReader> PolyReader = vtkSmartPointer<vtkPolyDataReader>::New();    
+    PolyReader -> SetFileName(_fullpath);
+    PolyReader -> Update();
+
+    vtkPolyData *Surface = PolyReader -> GetOutput();
+
+    #ifdef DEBUG
+        printf("Calculating Delaunay triangulation...\n");
+    #endif
 
     vtkSmartPointer<vtkDelaunay3D> Delaunay3D = vtkSmartPointer<vtkDelaunay3D>::New();
     Delaunay3D -> GlobalWarningDisplayOff();
@@ -68,16 +106,24 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
     Delaunay3D -> SetOffset(2.5);
     Delaunay3D -> SetInputData(Surface);
     Delaunay3D -> Update();
-    //double *DelaunayBounds0 = Delaunay3D -> GetOutput() -> GetBounds();
 
     vtkSmartPointer<vtkDataSetSurfaceFilter> UnStrctToPolyData = vtkSmartPointer<vtkDataSetSurfaceFilter>::New();
-    UnStrctToPolyData->SetInputData(Delaunay3D->GetOutput());
-    UnStrctToPolyData->Update();
+    UnStrctToPolyData -> SetInputData(Delaunay3D->GetOutput());
+    UnStrctToPolyData -> Update();
 
     vtkPolyData *SmoothCVXH = UnStrctToPolyData -> GetOutput();
-    //SAVE_POLYDATA(SmoothCVXH,"ConvexHull.vtk");
+
+
+    sprintf(_fullpath,"%s_ch.vtk",FileName);
+    SavePolyData(SmoothCVXH,_fullpath);
+
+    return;
 
     vtkPoints *CVXHPoints = SmoothCVXH -> GetPoints();
+
+    #ifdef DEBUG
+        printf("Fitting ellipsoid...%lld\n",CVXHPoints->GetNumberOfPoints());
+    #endif
 
     /*Fitting  the set of  points  CVXHPoints by  an arbitrary ellipsoid.
     This code is  based on  the script by Yuri  Petrov for  Matlab, which
@@ -101,6 +147,15 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
     double reg = 100.0;
     int n = CVXHPoints -> GetNumberOfPoints();
 
+    #ifdef DEBUG
+        printf("\t%d\n",n);
+    #endif
+
+
+    #ifdef DEBUG
+        printf("\t[1]\n");
+    #endif
+
     double* ATB = new double[9];
     double**ATA = new double*[9];
     for (i = 0; i < 9; i++) ATA[i] = new double[9];
@@ -113,6 +168,10 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
         for (j = 0; j < 9; j++) ATA[i][j] = 0.0;
     }
 
+    #ifdef DEBUG
+        printf("\t[2]\n");
+    #endif
+
     double x, y, z, r[3];
     for (i = 0; i < n; i++) {
         CVXHPoints -> GetPoint(i,r);
@@ -121,6 +180,11 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
         A[i][3] = 2.0*x*y; A[i][4] = 2.0*x*z; A[i][5] = 2.0*y*z;
         A[i][6] =   2.0*x; A[i][7] =   2.0*y; A[i][8] =   2.0*z;
     }
+
+    #ifdef DEBUG
+        printf("\t[3]\n");
+    #endif
+
 
     for (i = 0; i < 9; i++) {
         for (j = 0; j < 9; j++) {
@@ -131,6 +195,10 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
     for (i = 0; i < 9; i++) {
         for (k = 0; k < n; k++) ATB[i] += A[k][i];
     }
+
+    #ifdef DEBUG
+        printf("\tSolving the linear system...\n");
+    #endif
 
     vtkMath::SolveLinearSystem(ATA,ATB,9);
 

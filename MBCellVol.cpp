@@ -47,7 +47,11 @@
 #include <vtkPointData.h>
 #include <vtkImageRFFT.h>
 #include <vtkImageCast.h>
+#include <vtkKdTree.h>
 #include <vtkPoints.h>
+
+bool _export_nodes_projection = false;
+bool _export_ellipsoid_polydata = true;
 
 void SavePolyData(vtkPolyData *PolyData, const char FileName[]) {
 
@@ -74,13 +78,65 @@ template<typename sstype> void swap(sstype *x, sstype *y) {
      sstype t = *y; *y = *x; *x = t;
 }
 
-void sort(double *l1, double *l2, double *l3, int *i1, int *i2, int *i3) {
-    if (fabs(*l1) > fabs(*l2)) { swap(l1,l2); swap(i1,i2); }
-    if (fabs(*l2) > fabs(*l3)) { swap(l2,l3); swap(i2,i3); }
-    if (fabs(*l1) > fabs(*l2)) { swap(l1,l2); swap(i1,i2); }
+void sort(double v1, double v2, double v3, int *i1, int *i2, int *i3) {
+    double l1 = v1, l2 = v2, l3 = v3;
+    if (fabs(l1) > fabs(l2)) { swap(&l1,&l2); swap(i1,i2); }
+    if (fabs(l2) > fabs(l3)) { swap(&l2,&l3); swap(i2,i3); }
+    if (fabs(l1) > fabs(l2)) { swap(&l1,&l2); swap(i1,i2); }
 }
 
-void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
+void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, const char FileName[]) {
+    #ifdef DEBUG
+        printf("Calculating 2D projection...\n");
+    #endif
+
+    int j, N = 50;
+    double d, r[3];
+    float x, y, z, fx, fy;
+    char _fullpath[256];
+    sprintf(_fullpath,"%s.coo",FileName);
+
+    vtkPoints *NP = vtkPoints::New();
+
+    vtkPoints *Points = Ellipsoid -> GetPoints();
+    vtkSmartPointer<vtkKdTree> KdTree = vtkSmartPointer<vtkKdTree>::New();
+    KdTree -> BuildLocatorFromPoints(Points);
+
+    FILE *fcoo = fopen(_fullpath,"r");
+
+    sprintf(_fullpath,"%s_2dproj.coo",FileName);
+    FILE *fcoo2d = fopen(_fullpath,"w");
+    while (fscanf(fcoo,"%f %f %f",&x,&y,&z) != EOF) {
+        r[0] = 0.056*x; r[1] = 0.056*y; r[2] = 0.2*z;
+        j = KdTree -> FindClosestPoint(r,d);
+        Points -> GetPoint(j,r);
+
+        x = ((j-2)%((N-2)*N))/(N-2);
+        y = (j-2)%(N-2);
+        // Add small random factor to avoid nodes with same coordinates
+        fx = double(x)/(N-1);
+        fy = double(y)/(N-3);
+
+        r[0] = x; r[1] = y; r[2] = 0.0;
+
+        NP -> InsertNextPoint(r);
+
+        fprintf(fcoo2d,"%1.3f\t%1.3f\t0.0\n",fx,fy);
+    }
+    fclose(fcoo);
+    fclose(fcoo2d);
+
+    vtkPolyData *NPoly = vtkPolyData::New();
+    NPoly -> SetPoints(NP);
+
+    SavePolyData(NPoly,"ProjectedNodes.vtk");
+ 
+    #ifdef DEBUG
+        printf("\tDone!\n");
+    #endif
+}
+
+void GetEllipsoidFrom3DConvexHull(const char FileName[], double Rad[3]) {
 
     char _fullpath[256];
     sprintf(_fullpath,"%s_surface.vtk",FileName);
@@ -113,16 +169,10 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
 
     vtkPolyData *SmoothCVXH = UnStrctToPolyData -> GetOutput();
 
-
-    sprintf(_fullpath,"%s_ch.vtk",FileName);
-    SavePolyData(SmoothCVXH,_fullpath);
-
-    return;
-
     vtkPoints *CVXHPoints = SmoothCVXH -> GetPoints();
 
     #ifdef DEBUG
-        printf("Fitting ellipsoid...%lld\n",CVXHPoints->GetNumberOfPoints());
+        printf("Fitting ellipsoid using %lld points...\n",CVXHPoints->GetNumberOfPoints());
     #endif
 
     /*Fitting  the set of  points  CVXHPoints by  an arbitrary ellipsoid.
@@ -144,17 +194,7 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
     --Matheus Palhares Viana - 8.30.2013 - vianamp@gmail.com*/
 
     int i, j, k;
-    double reg = 100.0;
     int n = CVXHPoints -> GetNumberOfPoints();
-
-    #ifdef DEBUG
-        printf("\t%d\n",n);
-    #endif
-
-
-    #ifdef DEBUG
-        printf("\t[1]\n");
-    #endif
 
     double* ATB = new double[9];
     double**ATA = new double*[9];
@@ -168,23 +208,14 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
         for (j = 0; j < 9; j++) ATA[i][j] = 0.0;
     }
 
-    #ifdef DEBUG
-        printf("\t[2]\n");
-    #endif
-
     double x, y, z, r[3];
     for (i = 0; i < n; i++) {
         CVXHPoints -> GetPoint(i,r);
-        x = r[0]/reg; y=r[1]/reg; z = r[2]/reg;
+        x = r[0]; y=r[1]; z = r[2];
         A[i][0] =     x*x; A[i][1] =     y*y; A[i][2] =     z*z;
         A[i][3] = 2.0*x*y; A[i][4] = 2.0*x*z; A[i][5] = 2.0*y*z;
         A[i][6] =   2.0*x; A[i][7] =   2.0*y; A[i][8] =   2.0*z;
     }
-
-    #ifdef DEBUG
-        printf("\t[3]\n");
-    #endif
-
 
     for (i = 0; i < 9; i++) {
         for (j = 0; j < 9; j++) {
@@ -197,7 +228,7 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
     }
 
     #ifdef DEBUG
-        printf("\tSolving the linear system...\n");
+        printf("\tSolving the 1st linear system...\n");
     #endif
 
     vtkMath::SolveLinearSystem(ATA,ATB,9);
@@ -218,6 +249,10 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
         B2[i] = ATB[6+i];
         for (j = 0; j < 3; j++) A2[i][j] = -C[i][j];
     }
+
+    #ifdef DEBUG
+        printf("\tSolving the 2nd linear system...\n");
+    #endif
 
     vtkMath::SolveLinearSystem(A2,B2,3);
 
@@ -262,138 +297,164 @@ void GET_ELLIPSOID_FROM_3DCONVEX_HULL(const char FileName[]) {
         }
     }
 
+    #ifdef DEBUG
+        printf("\tDiagonalizing the eigensystem...\n");
+    #endif
+
     vtkMath::Diagonalize3x3(V,EVA,EVE);
 
     int l1 = 0, l2 = 1, l3 = 2;
-    sort(&EVA[0],&EVA[1],&EVA[2],&l1,&l2,&l3);
+    sort(EVA[0],EVA[1],EVA[2],&l1,&l2,&l3);
+
+    #ifdef DEBUG
+        printf("\t\tEigenvalues: %1.3f\t%1.3f\t%1.3f\n",EVA[l1],EVA[l2],EVA[l3]);    
+    #endif
 
     // Ellipsoid axes
     int npixelstoadd = 0;
-    double Rad[3];
-    Rad[0] = npixelstoadd+reg*sqrt(1.0/EVA[l3]);
-    Rad[1] = npixelstoadd+reg*sqrt(1.0/EVA[l2]);
-    Rad[2] = npixelstoadd+reg*sqrt(1.0/EVA[l1]);
+    Rad[0] = npixelstoadd+sqrt(1.0/EVA[l3]);
+    Rad[1] = npixelstoadd+sqrt(1.0/EVA[l2]);
+    Rad[2] = npixelstoadd+sqrt(1.0/EVA[l1]);
 
-    double vx[] = {1,0,0};
-    double vy[] = {0,1,0};
-    double vz[] = {0,0,1};
-    double ex[] = {EVE[0][l3],EVE[1][l3],EVE[2][l3]};
-    double ey[] = {EVE[0][l2],EVE[1][l2],EVE[2][l2]};
-    double ez[] = {EVE[0][l1],EVE[1][l1],EVE[2][l1]};
-    double q_vx_ex = acos(ex[0]);
+    if (_export_ellipsoid_polydata) {
 
-    vtkSmartPointer<vtkSphereSource> Sphere = vtkSmartPointer<vtkSphereSource>::New();
-    Sphere -> SetRadius(Rad[2]);
-    //Sphere -> SetPhiResolution(Control->GetEllipsoidDiscretization());
-    //Sphere -> SetThetaResolution(Control->GetEllipsoidDiscretization());
-    Sphere -> Update();
+        double vx[] = {1,0,0};
+        double vy[] = {0,1,0};
+        double vz[] = {0,0,1};
+        double ex[] = {EVE[0][l3],EVE[1][l3],EVE[2][l3]};
+        double ey[] = {EVE[0][l2],EVE[1][l2],EVE[2][l2]};
+        double ez[] = {EVE[0][l1],EVE[1][l1],EVE[2][l1]};
+        double q_vx_ex = acos(ex[0]);
 
-    vtkSmartPointer<vtkTransform> Scaling = vtkSmartPointer<vtkTransform>::New();
-    Scaling -> Scale(Rad[0]/Rad[2],Rad[1]/Rad[2],1.0);
-    Scaling -> Update();
+        vtkSmartPointer<vtkSphereSource> Sphere = vtkSmartPointer<vtkSphereSource>::New();
+        Sphere -> SetRadius(Rad[2]);
+        Sphere -> SetPhiResolution(50);
+        Sphere -> SetThetaResolution(50);
+        Sphere -> Update();
 
-    vtkSmartPointer<vtkTransformPolyDataFilter> ImplementScalingT = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
-    ImplementScalingT -> SetInputData(Sphere->GetOutput());
-    ImplementScalingT -> SetTransform(Scaling);
-    ImplementScalingT -> Update();
+        vtkSmartPointer<vtkTransform> Scaling = vtkSmartPointer<vtkTransform>::New();
+        Scaling -> Scale(Rad[0]/Rad[2],Rad[1]/Rad[2],1.0);
+        Scaling -> Update();
 
-    vtkPolyData *Ellipsoid = ImplementScalingT -> GetOutput();
+        vtkSmartPointer<vtkTransformPolyDataFilter> ImplementScalingT = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+        ImplementScalingT -> SetInputData(Sphere->GetOutput());
+        ImplementScalingT -> SetTransform(Scaling);
+        ImplementScalingT -> Update();
 
-    /*Moving the ellipsoid to the right place in 3D space.This is based on
-    two  rotations. The first  one moves  the x versor  towards the  vector
-    ex, which is  the ellipsoid major axis.  This  rotation must be done
-    around the  ortogonal versor  between  x and ex. The  second rotation
-    moves  the now  rotated  secondmajor  axis towards its right position.
-    This rotation must be done around the ellipsoid major axis.
-    */
+        #ifdef DEBUG
+            printf("\tGenerating ellipsoid...\n");
+        #endif
 
-    double ox[3];
-    vtkMath::Cross(vx,ex,ox);
-    vtkMath::Normalize(ox);
-    double nn = sqrt(ox[1]*ox[1]+ox[2]*ox[2]);
-    vtkSmartPointer<vtkTransform> RotOp = vtkSmartPointer<vtkTransform>::New();
-    RotOp -> RotateWXYZ(180.0/3.1415*q_vx_ex,ox);
-    RotOp -> Update();
+        vtkPolyData *Ellipsoid = ImplementScalingT -> GetOutput();
 
-    vtkSmartPointer<vtkTransformPolyDataFilter> ImplementRotOpT = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
-    ImplementRotOpT -> SetInputData(Ellipsoid);
-    ImplementRotOpT -> SetTransform(RotOp);
-    ImplementRotOpT -> Update();
-    Ellipsoid = ImplementRotOpT -> GetOutput();
+        #ifdef DEBUG
+            printf("\tTranslating the ellipsoid to the correct position...\n");
+        #endif
 
-    /* Position of ey after rotation RotOp. This equation can be found
-    at http://mathworld.wolfram.com/RodriguesRotationFormula.html.
-    (Rodrigues rotation matrix) */
+        /*Moving the ellipsoid to the right place in 3D space.This is based on
+        two  rotations. The first  one moves  the x versor  towards the  vector
+        ex, which is  the ellipsoid major axis.  This  rotation must be done
+        around the  ortogonal versor  between  x and ex. The  second rotation
+        moves  the now  rotated  secondmajor  axis towards its right position.
+        This rotation must be done around the ellipsoid major axis.
+        */
 
-    x=ox[0];y=ox[1];z=ox[2];
-    double RD[3][3] = {{cos(q_vx_ex)+x*x*(1-cos(q_vx_ex)),x*y*(1-cos(q_vx_ex))-z*sin(q_vx_ex),x*z*(1-cos(q_vx_ex))+y*sin(q_vx_ex)},
-                       {y*x*(1-cos(q_vx_ex))+z*sin(q_vx_ex),cos(q_vx_ex)+y*y*(1-cos(q_vx_ex)),y*z*(1-cos(q_vx_ex))-x*sin(q_vx_ex)},
-                       {z*x*(1-cos(q_vx_ex))-y*sin(q_vx_ex),z*y*(1-cos(q_vx_ex))+x*sin(q_vx_ex),cos(q_vx_ex)+z*z*(1-cos(q_vx_ex))}};
+        double ox[3];
+        vtkMath::Cross(vx,ex,ox);
+        vtkMath::Normalize(ox);
+        double nn = sqrt(ox[1]*ox[1]+ox[2]*ox[2]);
+        vtkSmartPointer<vtkTransform> RotOp = vtkSmartPointer<vtkTransform>::New();
+        RotOp -> RotateWXYZ(180.0/3.1415*q_vx_ex,ox);
+        RotOp -> Update();
 
-    double rotvy[3] = {RD[0][1]*vy[1],RD[1][1]*vy[1],RD[2][1]*vy[1]};
+        vtkSmartPointer<vtkTransformPolyDataFilter> ImplementRotOpT = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+        ImplementRotOpT -> SetInputData(Ellipsoid);
+        ImplementRotOpT -> SetTransform(RotOp);
+        ImplementRotOpT -> Update();
+        Ellipsoid = ImplementRotOpT -> GetOutput();
 
-    double q_ey_rotvy = -acos(vtkMath::Dot(rotvy,ey));
+        /* Position of ey after rotation RotOp. This equation can be found
+        at http://mathworld.wolfram.com/RodriguesRotationFormula.html.
+        (Rodrigues rotation matrix) */
 
-    /* Checking if the second rotation must be done clockwise or not */
-    x=ex[0];y=ex[1];z=ex[2];
-    double RD2[3][3] = {{cos(q_ey_rotvy)+x*x*(1-cos(q_ey_rotvy)),x*y*(1-cos(q_ey_rotvy))-z*sin(q_ey_rotvy),x*z*(1-cos(q_ey_rotvy))+y*sin(q_ey_rotvy)},
-                {y*x*(1-cos(q_ey_rotvy))+z*sin(q_ey_rotvy),cos(q_ey_rotvy)+y*y*(1-cos(q_ey_rotvy)),y*z*(1-cos(q_ey_rotvy))-x*sin(q_ey_rotvy)},
-                {z*x*(1-cos(q_ey_rotvy))-y*sin(q_ey_rotvy),z*y*(1-cos(q_ey_rotvy))+x*sin(q_ey_rotvy),cos(q_ey_rotvy)+z*z*(1-cos(q_ey_rotvy))}};
+        x=ox[0];y=ox[1];z=ox[2];
+        double RD[3][3] = {{cos(q_vx_ex)+x*x*(1-cos(q_vx_ex)),x*y*(1-cos(q_vx_ex))-z*sin(q_vx_ex),x*z*(1-cos(q_vx_ex))+y*sin(q_vx_ex)},
+                           {y*x*(1-cos(q_vx_ex))+z*sin(q_vx_ex),cos(q_vx_ex)+y*y*(1-cos(q_vx_ex)),y*z*(1-cos(q_vx_ex))-x*sin(q_vx_ex)},
+                           {z*x*(1-cos(q_vx_ex))-y*sin(q_vx_ex),z*y*(1-cos(q_vx_ex))+x*sin(q_vx_ex),cos(q_vx_ex)+z*z*(1-cos(q_vx_ex))}};
 
-    double rotrotvy[3] = {0,0,0};
-    for (i=0;i<3;i++) {
-        rotrotvy[0] += RD2[0][i]*rotvy[i];
-        rotrotvy[1] += RD2[1][i]*rotvy[i];
-        rotrotvy[2] += RD2[2][i]*rotvy[i];
+        double rotvy[3] = {RD[0][1]*vy[1],RD[1][1]*vy[1],RD[2][1]*vy[1]};
+
+        double q_ey_rotvy = -acos(vtkMath::Dot(rotvy,ey));
+
+        /* Checking if the second rotation must be done clockwise or not */
+        x=ex[0];y=ex[1];z=ex[2];
+        double RD2[3][3] = {{cos(q_ey_rotvy)+x*x*(1-cos(q_ey_rotvy)),x*y*(1-cos(q_ey_rotvy))-z*sin(q_ey_rotvy),x*z*(1-cos(q_ey_rotvy))+y*sin(q_ey_rotvy)},
+                    {y*x*(1-cos(q_ey_rotvy))+z*sin(q_ey_rotvy),cos(q_ey_rotvy)+y*y*(1-cos(q_ey_rotvy)),y*z*(1-cos(q_ey_rotvy))-x*sin(q_ey_rotvy)},
+                    {z*x*(1-cos(q_ey_rotvy))-y*sin(q_ey_rotvy),z*y*(1-cos(q_ey_rotvy))+x*sin(q_ey_rotvy),cos(q_ey_rotvy)+z*z*(1-cos(q_ey_rotvy))}};
+
+        double rotrotvy[3] = {0,0,0};
+        for (i=0;i<3;i++) {
+            rotrotvy[0] += RD2[0][i]*rotvy[i];
+            rotrotvy[1] += RD2[1][i]*rotvy[i];
+            rotrotvy[2] += RD2[2][i]*rotvy[i];
+        }
+
+        double q_rrvy_ey = vtkMath::Dot(rotrotvy,ey);
+        if ((1.0-q_rrvy_ey)>1E-5) {
+            q_ey_rotvy *= -1.0;
+        }
+
+        /* Performing the second Rotation */
+        vtkSmartPointer<vtkTransform> RotOp2 = vtkSmartPointer<vtkTransform>::New();
+        RotOp2 -> RotateWXYZ(180.0/3.1415*q_ey_rotvy,ex);
+        RotOp2 -> Update();
+
+        vtkSmartPointer<vtkTransformPolyDataFilter> ImplementRotOp2T = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+        ImplementRotOp2T -> SetInputData(Ellipsoid);
+        ImplementRotOp2T -> SetTransform(RotOp2);
+        ImplementRotOp2T -> Update();
+        Ellipsoid = ImplementRotOp2T -> GetOutput();
+
+        vtkSmartPointer<vtkTransform> TransOp = vtkSmartPointer<vtkTransform>::New();
+        TransOp -> Translate(EllipsoidCenter[0],EllipsoidCenter[1],EllipsoidCenter[2]);
+        TransOp -> Update();
+
+        vtkSmartPointer<vtkTransformPolyDataFilter> ImplementTransOp = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+        ImplementTransOp -> SetInputData(Ellipsoid);
+        ImplementTransOp -> SetTransform(TransOp);
+        ImplementTransOp -> Update();
+        Ellipsoid = ImplementTransOp -> GetOutput();
+
+        sprintf(_fullpath,"%s_ellipsoid.vtk",FileName);
+        SavePolyData(Ellipsoid,_fullpath);
+
+        vtkSmartPointer<vtkPoints> EVE_Points = vtkSmartPointer<vtkPoints>::New();
+        EVE_Points -> InsertPoint(0,EllipsoidCenter[0],EllipsoidCenter[1],EllipsoidCenter[2]);
+        EVE_Points -> InsertPoint(1,EllipsoidCenter[0]+Rad[0]*ex[0],EllipsoidCenter[1]+Rad[0]*ex[1],EllipsoidCenter[2]+Rad[0]*ex[2]);
+        EVE_Points -> InsertPoint(2,EllipsoidCenter[0]+Rad[1]*ey[0],EllipsoidCenter[1]+Rad[1]*ey[1],EllipsoidCenter[2]+Rad[1]*ey[2]);
+        EVE_Points -> InsertPoint(3,EllipsoidCenter[0]+Rad[2]*ez[0],EllipsoidCenter[1]+Rad[2]*ez[1],EllipsoidCenter[2]+Rad[2]*ez[2]);
+        EVE_Points -> InsertPoint(4,EllipsoidCenter[0]+Rad[2]*rotvy[0],EllipsoidCenter[1]+Rad[2]*rotvy[1],EllipsoidCenter[2]+Rad[2]*rotvy[2]);
+        vtkSmartPointer<vtkCellArray> EVE_CellArray = vtkSmartPointer<vtkCellArray>::New();
+        EVE_CellArray -> InsertNextCell(2);
+        EVE_CellArray -> InsertCellPoint(0); EVE_CellArray -> InsertCellPoint(1);
+        EVE_CellArray -> InsertNextCell(2);
+        EVE_CellArray -> InsertCellPoint(0); EVE_CellArray -> InsertCellPoint(2);
+        EVE_CellArray -> InsertNextCell(2);
+        EVE_CellArray -> InsertCellPoint(0); EVE_CellArray -> InsertCellPoint(3);
+        EVE_CellArray -> InsertNextCell(2);
+        EVE_CellArray -> InsertCellPoint(0); EVE_CellArray -> InsertCellPoint(4);
+        vtkSmartPointer<vtkPolyData> EVEVectors = vtkSmartPointer<vtkPolyData>::New();
+        EVEVectors -> SetPoints(EVE_Points);
+        EVEVectors -> SetLines(EVE_CellArray);
+
+        sprintf(_fullpath,"%s_ellipsoid_axes.vtk",FileName);
+        SavePolyData(EVEVectors,_fullpath);
+
+        if (_export_nodes_projection) {
+            CalculateNodes2DProjection(Ellipsoid,FileName);
+        }
+
     }
-
-    double q_rrvy_ey = vtkMath::Dot(rotrotvy,ey);
-    if ((1.0-q_rrvy_ey)>1E-5) {
-        q_ey_rotvy *= -1.0;
-    }
-
-    /* Performing the second Rotation */
-    vtkSmartPointer<vtkTransform> RotOp2 = vtkSmartPointer<vtkTransform>::New();
-    RotOp2 -> RotateWXYZ(180.0/3.1415*q_ey_rotvy,ex);
-    RotOp2 -> Update();
-
-    vtkSmartPointer<vtkTransformPolyDataFilter> ImplementRotOp2T = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
-    ImplementRotOp2T -> SetInputData(Ellipsoid);
-    ImplementRotOp2T -> SetTransform(RotOp2);
-    ImplementRotOp2T -> Update();
-    Ellipsoid = ImplementRotOp2T -> GetOutput();
-
-    vtkSmartPointer<vtkTransform> TransOp = vtkSmartPointer<vtkTransform>::New();
-    TransOp -> Translate(reg*EllipsoidCenter[0],reg*EllipsoidCenter[1],reg*EllipsoidCenter[2]);
-    TransOp -> Update();
-
-    vtkSmartPointer<vtkTransformPolyDataFilter> ImplementTransOp = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
-    ImplementTransOp -> SetInputData(Ellipsoid);
-    ImplementTransOp -> SetTransform(TransOp);
-    ImplementTransOp -> Update();
-    Ellipsoid = ImplementTransOp -> GetOutput();
-    //SAVE_POLYDATA(Ellipsoid,"EllipsoidCVXH.vtk");
-
-    for (i=0;i<3;i++) { EllipsoidCenter[i]*=reg; }
-    vtkSmartPointer<vtkPoints> EVE_Points = vtkSmartPointer<vtkPoints>::New();
-    EVE_Points -> InsertPoint(0,EllipsoidCenter[0],EllipsoidCenter[1],EllipsoidCenter[2]);
-    EVE_Points -> InsertPoint(1,EllipsoidCenter[0]+Rad[0]*ex[0],EllipsoidCenter[1]+Rad[0]*ex[1],EllipsoidCenter[2]+Rad[0]*ex[2]);
-    EVE_Points -> InsertPoint(2,EllipsoidCenter[0]+Rad[1]*ey[0],EllipsoidCenter[1]+Rad[1]*ey[1],EllipsoidCenter[2]+Rad[1]*ey[2]);
-    EVE_Points -> InsertPoint(3,EllipsoidCenter[0]+Rad[2]*ez[0],EllipsoidCenter[1]+Rad[2]*ez[1],EllipsoidCenter[2]+Rad[2]*ez[2]);
-    EVE_Points -> InsertPoint(4,EllipsoidCenter[0]+Rad[2]*rotvy[0],EllipsoidCenter[1]+Rad[2]*rotvy[1],EllipsoidCenter[2]+Rad[2]*rotvy[2]);
-    vtkSmartPointer<vtkCellArray> EVE_CellArray = vtkSmartPointer<vtkCellArray>::New();
-    EVE_CellArray -> InsertNextCell(2);
-    EVE_CellArray -> InsertCellPoint(0); EVE_CellArray -> InsertCellPoint(1);
-    EVE_CellArray -> InsertNextCell(2);
-    EVE_CellArray -> InsertCellPoint(0); EVE_CellArray -> InsertCellPoint(2);
-    EVE_CellArray -> InsertNextCell(2);
-    EVE_CellArray -> InsertCellPoint(0); EVE_CellArray -> InsertCellPoint(3);
-    EVE_CellArray -> InsertNextCell(2);
-    EVE_CellArray -> InsertCellPoint(0); EVE_CellArray -> InsertCellPoint(4);
-    vtkSmartPointer<vtkPolyData> EVEVectors = vtkSmartPointer<vtkPolyData>::New();
-    EVEVectors -> SetPoints(EVE_Points);
-    EVEVectors -> SetLines(EVE_CellArray);
-    //SAVE_POLYDATA(EVEVectors,"EllipsoidCVXHAxis.vtk");
 
     /* Clean memory */
 
@@ -440,10 +501,24 @@ int main(int argc, char *argv[]) {
         if (!strcmp(argv[i],"-path")) {
             sprintf(_impath,"%s//",argv[i+1]);
         }
+        if (!strcmp(argv[i],"-export_off")) {
+            _export_ellipsoid_polydata = false;
+        }
+        if (!strcmp(argv[i],"-project_nodes")) {
+            _export_nodes_projection = true;
+        }
     }
 
+    // Generating summary file and writing the header
+    char _summaryfilename[256];
+    sprintf(_summaryfilename,"%scell_volume.txt",_impath);
+    FILE *fsummary = fopen(_summaryfilename,"w");
+    fprintf(fsummary,"MBCellVol V1.0\n");
+    fprintf(fsummary,"Folder: %s\n",_impath);
+    fprintf(fsummary,"Cell path\tMinor radius (um)\tMid radius (um)\tMajor axis (um)\tSurface Area (um2)\tVolume (um3)\n");
+    fclose(fsummary);
 
-    // Multiscale vesselness
+    double Rad[3], SA, V;
     char _tifffilename[256];
     char _tifflistpath[128];
     sprintf(_tifflistpath,"%smitograph.files",_impath);
@@ -451,10 +526,18 @@ int main(int argc, char *argv[]) {
     while (fgets(_tifffilename,256, f) != NULL) {
 
         _tifffilename[strcspn(_tifffilename, "\n" )] = '\0';
-        GET_ELLIPSOID_FROM_3DCONVEX_HULL(_tifffilename);
-        //MultiscaleVesselness(_tifffilename,_sigmai,_dsigma,_sigmaf,attibutes);
-        
+        GetEllipsoidFrom3DConvexHull(_tifffilename,Rad);
 
+        SA = 4*3.141592*pow( pow(Rad[2]*Rad[1],1.6) + pow(Rad[2]*Rad[0],1.6) + pow(Rad[1]*Rad[0],1.6) ,1.0/1.6);
+
+        V = 4.0/3.0 * 3.141592 * Rad[0]*Rad[1]*Rad[2];
+
+        fsummary = fopen(_summaryfilename,"a");
+        fprintf(fsummary,"%s\t%1.6f\t%1.6f\t%1.6f\t%1.6f\t%1.6f\n",_tifffilename,Rad[0],Rad[1],Rad[2],SA,V);
+        fclose(fsummary);
+
+        printf("%s\n",_tifffilename);
+      
     }
 
 }

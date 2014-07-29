@@ -1,0 +1,4 @@
+MBCellVol V1.0
+Folder: 
+Cell path	Minor radius (um)	Mid radius (um)	Major axis (um)	Surface Area (um2)	Volume (um3)
+020714_1_25_21	1.382826	1.465045	2.466858	76.596088	20.933953

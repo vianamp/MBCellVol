@@ -85,7 +85,7 @@ void sort(double v1, double v2, double v3, int *i1, int *i2, int *i3) {
     if (fabs(l1) > fabs(l2)) { swap(&l1,&l2); swap(i1,i2); }
 }
 
-void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, const char FileName[]) {
+void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, double Rad[3], const char FileName[]) {
     #ifdef DEBUG
         printf("Calculating 2D projection...\n");
     #endif
@@ -104,6 +104,9 @@ void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, const char FileName[]) {
 
     FILE *fcoo = fopen(_fullpath,"r");
 
+    double SA = 4*3.141592*pow( pow(Rad[2]*Rad[1],1.6) + pow(Rad[2]*Rad[0],1.6) + pow(Rad[1]*Rad[0],1.6) ,1.0/1.6);
+    double Ly = sqrt(SA*Rad[2]/Rad[1]);
+    double Lx = Ly*Rad[1]/Rad[2];
     sprintf(_fullpath,"%s_2dproj.coo",FileName);
     FILE *fcoo2d = fopen(_fullpath,"w");
     while (fscanf(fcoo,"%f %f %f",&x,&y,&z) != EOF) {
@@ -114,10 +117,14 @@ void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, const char FileName[]) {
         x = ((j-2)%((N-2)*N))/(N-2);
         y = (j-2)%(N-2);
         // Add small random factor to avoid nodes with same coordinates
-        fx = double(x)/(N-1);
-        fy = double(y)/(N-3);
+        fx = Lx * (double(x)/(N-1) + 1E-2*((1.0*rand())/RAND_MAX-0.5));
+        fy = Ly * (double(y)/(N-3) + 1E-2*((1.0*rand())/RAND_MAX-0.5));
 
-        r[0] = x; r[1] = y; r[2] = 0.0;
+        r[0] = x;
+        r[1] = y;
+        r[2] = 0.0;
+
+        printf("%f\t%f\n",Lx,Ly);
 
         NP -> InsertNextPoint(r);
 
@@ -451,7 +458,7 @@ void GetEllipsoidFrom3DConvexHull(const char FileName[], double Rad[3]) {
         SavePolyData(EVEVectors,_fullpath);
 
         if (_export_nodes_projection) {
-            CalculateNodes2DProjection(Ellipsoid,FileName);
+            CalculateNodes2DProjection(Ellipsoid,Rad,FileName);
         }
 
     }
@@ -495,6 +502,8 @@ int main(int argc, char *argv[]) {
     int i;
     char _impath[128];
     sprintf(_impath,"");
+
+    srand(getpid());
 
     // Collecting input parameters
     for (i = 0; i < argc; i++) {

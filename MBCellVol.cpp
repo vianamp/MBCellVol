@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>
 
 #include <vtkMath.h>
 #include <vtkPolyLine.h>
@@ -96,19 +97,29 @@ void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, double Rad[3], const cha
     char _fullpath[256];
     sprintf(_fullpath,"%s.coo",FileName);
 
-    vtkPoints *NP = vtkPoints::New();
-
     vtkPoints *Points = Ellipsoid -> GetPoints();
     vtkSmartPointer<vtkKdTree> KdTree = vtkSmartPointer<vtkKdTree>::New();
     KdTree -> BuildLocatorFromPoints(Points);
 
     FILE *fcoo = fopen(_fullpath,"r");
 
+    /*Calculating the dimension od the plane to make sure it has the same area as
+    the ellipsoid. Values of Lx and Ly are stored in the file .coo2d.*/
+
     double SA = 4*3.141592*pow( pow(Rad[2]*Rad[1],1.6) + pow(Rad[2]*Rad[0],1.6) + pow(Rad[1]*Rad[0],1.6) ,1.0/1.6);
     double Ly = sqrt(SA*Rad[2]/Rad[1]);
     double Lx = Ly*Rad[1]/Rad[2];
-    sprintf(_fullpath,"%s_2dproj.coo",FileName);
+    
+    sprintf(_fullpath,"%s.coo2d",FileName);
     FILE *fcoo2d = fopen(_fullpath,"w");
+
+    fprintf(fcoo2d,"Plane dimensions:\n");
+    fprintf(fcoo2d,"%1.6f\n",Lx);
+    fprintf(fcoo2d,"%1.6f\n",Ly);
+    fprintf(fcoo2d,"2D Coordinates:\n");
+
+    /*For each node, we find it closest projection on the ellipsoid surface.*/
+
     while (fscanf(fcoo,"%f %f %f",&x,&y,&z) != EOF) {
         r[0] = 0.056*x; r[1] = 0.056*y; r[2] = 0.2*z;
         j = KdTree -> FindClosestPoint(r,d);
@@ -120,23 +131,10 @@ void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, double Rad[3], const cha
         fx = Lx * (double(x)/(N-1) + 1E-2*((1.0*rand())/RAND_MAX-0.5));
         fy = Ly * (double(y)/(N-3) + 1E-2*((1.0*rand())/RAND_MAX-0.5));
 
-        r[0] = x;
-        r[1] = y;
-        r[2] = 0.0;
-
-        printf("%f\t%f\n",Lx,Ly);
-
-        NP -> InsertNextPoint(r);
-
-        fprintf(fcoo2d,"%1.3f\t%1.3f\t0.0\n",fx,fy);
+        fprintf(fcoo2d,"%1.6f\t%1.6f\n",fx,fy);
     }
     fclose(fcoo);
     fclose(fcoo2d);
-
-    vtkPolyData *NPoly = vtkPolyData::New();
-    NPoly -> SetPoints(NP);
-
-    SavePolyData(NPoly,"ProjectedNodes.vtk");
  
     #ifdef DEBUG
         printf("\tDone!\n");
@@ -323,7 +321,7 @@ void GetEllipsoidFrom3DConvexHull(const char FileName[], double Rad[3]) {
     Rad[1] = npixelstoadd+sqrt(1.0/EVA[l2]);
     Rad[2] = npixelstoadd+sqrt(1.0/EVA[l1]);
 
-    if (_export_ellipsoid_polydata) {
+    if (_export_ellipsoid_polydata || _export_nodes_projection) {
 
         double vx[] = {1,0,0};
         double vy[] = {0,1,0};
@@ -433,7 +431,7 @@ void GetEllipsoidFrom3DConvexHull(const char FileName[], double Rad[3]) {
         Ellipsoid = ImplementTransOp -> GetOutput();
 
         sprintf(_fullpath,"%s_ellipsoid.vtk",FileName);
-        SavePolyData(Ellipsoid,_fullpath);
+        if (_export_ellipsoid_polydata) SavePolyData(Ellipsoid,_fullpath);
 
         vtkSmartPointer<vtkPoints> EVE_Points = vtkSmartPointer<vtkPoints>::New();
         EVE_Points -> InsertPoint(0,EllipsoidCenter[0],EllipsoidCenter[1],EllipsoidCenter[2]);
@@ -455,11 +453,9 @@ void GetEllipsoidFrom3DConvexHull(const char FileName[], double Rad[3]) {
         EVEVectors -> SetLines(EVE_CellArray);
 
         sprintf(_fullpath,"%s_ellipsoid_axes.vtk",FileName);
-        SavePolyData(EVEVectors,_fullpath);
+        if (_export_ellipsoid_polydata) SavePolyData(EVEVectors,_fullpath);
 
-        if (_export_nodes_projection) {
-            CalculateNodes2DProjection(Ellipsoid,Rad,FileName);
-        }
+        if (_export_nodes_projection) CalculateNodes2DProjection(Ellipsoid,Rad,FileName);
 
     }
 

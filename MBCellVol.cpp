@@ -113,10 +113,10 @@ void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, double Rad[3], const cha
     sprintf(_fullpath,"%s.coo2d",FileName);
     FILE *fcoo2d = fopen(_fullpath,"w");
 
-    fprintf(fcoo2d,"Plane dimensions:\n");
+    fprintf(fcoo2d,"Dimensions:\n");
     fprintf(fcoo2d,"%1.6f\n",Lx);
     fprintf(fcoo2d,"%1.6f\n",Ly);
-    fprintf(fcoo2d,"2D Coordinates:\n");
+    fprintf(fcoo2d,"Coordinates:\n");
 
     /*For each node, we find it closest projection on the ellipsoid surface.*/
 

@@ -107,8 +107,8 @@ void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, double Rad[3], const cha
     the ellipsoid. Values of Lx and Ly are stored in the file .coo2d.*/
 
     double SA = 4*3.141592*pow( pow(Rad[2]*Rad[1],1.6) + pow(Rad[2]*Rad[0],1.6) + pow(Rad[1]*Rad[0],1.6) ,1.0/1.6);
-    double Ly = sqrt(SA*Rad[2]/Rad[1]);
-    double Lx = Ly*Rad[1]/Rad[2];
+    double Ly = sqrt( 0.5 * SA * Rad[2]/Rad[1] );
+    double Lx = SA / Ly;
     
     sprintf(_fullpath,"%s.coo2d",FileName);
     FILE *fcoo2d = fopen(_fullpath,"w");
@@ -128,8 +128,8 @@ void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, double Rad[3], const cha
         x = ((j-2)%((N-2)*N))/(N-2);
         y = (j-2)%(N-2);
         // Add small random factor to avoid nodes with same coordinates
-        fx = Lx * (double(x)/(N-1) + 1E-2*((1.0*rand())/RAND_MAX-0.5));
-        fy = Ly * (double(y)/(N-3) + 1E-2*((1.0*rand())/RAND_MAX-0.5));
+        fx = Lx * (double(x)/(N-1) + 1E-5*((1.0*rand())/RAND_MAX-0.5));
+        fy = Ly * (double(y)/(N-3) + 1E-5*((1.0*rand())/RAND_MAX-0.5));
 
         fprintf(fcoo2d,"%1.6f\t%1.6f\n",fx,fy);
     }

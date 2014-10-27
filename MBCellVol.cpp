@@ -51,8 +51,10 @@
 #include <vtkKdTree.h>
 #include <vtkPoints.h>
 
-bool _export_nodes_projection = false;
-bool _export_ellipsoid_polydata = true;
+    double _dxy, _dz = -1.0;
+    bool _export_nodes_projection = false;
+    bool _export_ellipsoid_polydata = true;
+    bool _export_ellipsoid_projection = false;
 
 void SavePolyData(vtkPolyData *PolyData, const char FileName[]) {
 
@@ -74,6 +76,46 @@ void SavePolyData(vtkPolyData *PolyData, const char FileName[]) {
         printf("\tFile Saved!\n");
     #endif
 }
+
+void ExportEllipsoidProjection(vtkImageData *Image, vtkPolyData *Ellipsoid, const char FileName[]) {
+
+    #ifdef DEBUG
+        printf("Saving Ellipsoid Projection...\n");
+    #endif
+
+    int *Dim = Image -> GetDimensions();
+    vtkSmartPointer<vtkImageData> MaxP = vtkSmartPointer<vtkImageData>::New();
+    MaxP -> SetDimensions(Dim[0],Dim[1],1);
+    vtkIdType N = Dim[0] * Dim[1];
+
+    vtkSmartPointer<vtkUnsignedCharArray> MaxPArray = vtkSmartPointer<vtkUnsignedCharArray>::New();
+    MaxPArray -> SetNumberOfComponents(1);
+    MaxPArray -> SetNumberOfTuples(N);
+    MaxPArray -> FillComponent(0,0);
+
+    double r[3];
+    vtkIdType id;
+    for (id = Ellipsoid -> GetNumberOfPoints(); id--;) {
+        Ellipsoid -> GetPoint(id,r);
+        MaxPArray -> SetTuple1(MaxP->FindPoint((int)(r[0]/_dxy),(int)(r[1]/_dxy),0),255);
+    }
+    MaxPArray -> Modified();
+
+    MaxP -> GetPointData() -> SetScalars(MaxPArray);
+
+    vtkSmartPointer<vtkPNGWriter> PNGWriter = vtkSmartPointer<vtkPNGWriter>::New();
+    PNGWriter -> SetFileName(FileName);
+    PNGWriter -> SetFileDimensionality(2);
+    PNGWriter -> SetCompressionLevel(0);
+    PNGWriter -> SetInputData(MaxP);
+    PNGWriter -> Write();
+
+    #ifdef DEBUG
+        printf("File Saved!\n");
+    #endif
+
+}
+
 
 template<typename sstype> void swap(sstype *x, sstype *y) {
      sstype t = *y; *y = *x; *x = t;
@@ -121,7 +163,7 @@ void CalculateNodes2DProjection(vtkPolyData *Ellipsoid, double Rad[3], const cha
     /*For each node, we find it closest projection on the ellipsoid surface.*/
 
     while (fscanf(fcoo,"%f %f %f",&x,&y,&z) != EOF) {
-        r[0] = 0.056*x; r[1] = 0.056*y; r[2] = 0.2*z;
+        r[0] = x; r[1] = y; r[2] = z;
         j = KdTree -> FindClosestPoint(r,d);
         Points -> GetPoint(j,r);
 
@@ -457,6 +499,21 @@ void GetEllipsoidFrom3DConvexHull(const char FileName[], double Rad[3]) {
 
         if (_export_nodes_projection) CalculateNodes2DProjection(Ellipsoid,Rad,FileName);
 
+        if (_export_ellipsoid_projection) {
+
+            sprintf(_fullpath,"%s.tif",FileName);
+            vtkSmartPointer<vtkTIFFReader> TIFFReader = vtkSmartPointer<vtkTIFFReader>::New();
+            TIFFReader -> SetFileName(_fullpath);
+            TIFFReader -> Update();
+            vtkImageData *Image = TIFFReader -> GetOutput();
+            double range[2]; range[1] = 0;
+            Image->GetScalarRange(range);
+
+            sprintf(_fullpath,"%s_ellipsoid.png",FileName);
+            ExportEllipsoidProjection(Image,Ellipsoid,_fullpath);
+
+        }
+
     }
 
     /* Clean memory */
@@ -512,21 +569,42 @@ int main(int argc, char *argv[]) {
         if (!strcmp(argv[i],"-project_nodes")) {
             _export_nodes_projection = true;
         }
+        if (!strcmp(argv[i],"-xy")) {
+            _dxy = atof(argv[i+1]);
+        }
+        if (!strcmp(argv[i],"-z")) {
+            _dz = atof(argv[i+1]);
+        }
+        if (!strcmp(argv[i],"-project_ellipsoid")) {
+            _export_ellipsoid_projection = true;
+        }
     }
 
+    if (_dz<0) {
+        printf("Please, use -dxy and -dz to provide the pixel size.\n");
+        return -1;
+    }
+
+    // Generating list of files to run
+    char _cmd[256];
+    sprintf(_cmd,"ls %s*_surface.vtk | sed -e 's/_surface.vtk//' > %s.mbcellvol",_impath,_impath);
+    system(_cmd);
+
     // Generating summary file and writing the header
-    char _summaryfilename[256];
+    char _summaryfilename[256], _individfilename[256];
     sprintf(_summaryfilename,"%scell_volume.txt",_impath);
-    FILE *fsummary = fopen(_summaryfilename,"w");
+    FILE *findv, *fsummary = fopen(_summaryfilename,"w");
     fprintf(fsummary,"MBCellVol V1.0\n");
     fprintf(fsummary,"Folder: %s\n",_impath);
+    time_t now = time(0);
+    fprintf(fsummary,"%s\n",ctime(&now));
     fprintf(fsummary,"Cell path\tMinor radius (um)\tMid radius (um)\tMajor axis (um)\tSurface Area (um2)\tVolume (um3)\n");
     fclose(fsummary);
 
     double Rad[3], SA, V;
     char _tifffilename[256];
     char _tifflistpath[128];
-    sprintf(_tifflistpath,"%smitograph.files",_impath);
+    sprintf(_tifflistpath,"%s.mbcellvol",_impath);
     FILE *f = fopen(_tifflistpath,"r");
     while (fgets(_tifffilename,256, f) != NULL) {
 
@@ -537,9 +615,17 @@ int main(int argc, char *argv[]) {
 
         V = 4.0/3.0 * 3.141592 * Rad[0]*Rad[1]*Rad[2];
 
+        //Save group file
         fsummary = fopen(_summaryfilename,"a");
         fprintf(fsummary,"%s\t%1.6f\t%1.6f\t%1.6f\t%1.6f\t%1.6f\n",_tifffilename,Rad[0],Rad[1],Rad[2],SA,V);
         fclose(fsummary);
+
+        //Save individual file
+        sprintf(_individfilename,"%s.mbcellvol",_tifffilename);
+        findv = fopen(_individfilename,"w");
+        fprintf(findv,"Cell path\tMinor radius (um)\tMid radius (um)\tMajor axis (um)\tSurface Area (um2)\tVolume (um3)\n");
+        fprintf(findv,"%1.6f\t%1.6f\t%1.6f\t%1.6f\t%1.6f\n",Rad[0],Rad[1],Rad[2],SA,V);
+        fclose(findv);
 
         printf("%s\n",_tifffilename);
       
